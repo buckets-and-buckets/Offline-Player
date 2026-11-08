@@ -103,9 +103,10 @@ h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; }
 input[type="text"], input[type="search"], select { min-height: 44px; padding: 0 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--fg); font: inherit; min-width: 0; }
 .field { display: flex; gap: 8px; flex-wrap: wrap; }
 .field input { flex: 1 1 180px; }
-.tools { display: grid; gap: 10px; margin-bottom: 14px; }
-.search-row { display: flex; gap: 8px; }
-.search-row input { flex: 1; }
+.tools { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; margin-bottom: 14px; }
+.search-row { display: flex; gap: 8px; min-width: 0; }
+.search-row input { flex: 1 1 0; min-width: 0; width: 0; }
+.search-row select { flex: 0 1 140px; min-width: 0; max-width: 45%; }
 .chips { display: flex; gap: 6px; flex-wrap: wrap; }
 .chip { min-height: 36px; padding: 0 14px; border-radius: 999px; border: 1px solid var(--line); font-weight: 500; font-size: 14px; }
 .chip[aria-pressed="true"] { background: var(--fg); color: var(--bg); border-color: var(--fg); }
@@ -229,6 +230,7 @@ input[type="range"] { width: 100%; height: 28px; accent-color: var(--accent); ma
       <span class="net" id="net" role="status"><i></i><b>Online</b></span>
     </div>
     <div class="top-actions">
+      <button class="btn" id="installBtn" type="button" hidden>Install app</button>
       <button class="btn" id="linkBtn" type="button" aria-expanded="false" aria-controls="impPanel"><svg class="ic"><use href="#i-link"/></svg>From link</button>
       <button class="btn primary" id="addBtn" type="button"><svg class="ic"><use href="#i-plus"/></svg>Add files</button>
     </div>
@@ -276,7 +278,7 @@ input[type="range"] { width: 100%; height: 28px; accent-color: var(--accent); ma
         <div class="search-row">
           <input type="search" id="search" placeholder="Search your files" aria-label="Search your files" autocomplete="off">
           <select id="sort" aria-label="Sort files">
-            <option value="recent">Recently added</option>
+            <option value="recent">Newest</option>
             <option value="az">A to Z</option>
             <option value="long">Longest first</option>
           </select>
@@ -315,7 +317,7 @@ input[type="range"] { width: 100%; height: 28px; accent-color: var(--accent); ma
     </section>
   </main>
 
-  <p class="hint foot">To install: on Android, open the browser menu and choose Install app. On iPhone, tap Share, then Add to Home Screen. Your saved music plays with no internet.</p>
+  <p class="hint foot">To install: on Android, open the browser menu and choose Install app. On iPhone, tap Share, then Add to Home Screen. Installed, it opens and plays with no internet.</p>
 </div>
 
 <div class="dock" id="dock" hidden>
@@ -765,6 +767,11 @@ input[type="range"] { width: 100%; height: 28px; accent-color: var(--accent); ma
     $('#sleepBtn').setAttribute('aria-pressed', String(!!sleepMin));
   }
 
+  function refreshPlaying() {
+    document.querySelectorAll('li.row[data-id]').forEach(li => {
+      li.classList.toggle('is-playing', !!cur && li.dataset.id === cur.id && !media.paused);
+    });
+  }
   function updatePlayIcon() {
     const b = $('#playBtn');
     b.innerHTML = ic(media.paused ? 'play' : 'pause');
@@ -902,6 +909,15 @@ input[type="range"] { width: 100%; height: 28px; accent-color: var(--accent); ma
     document.querySelectorAll('[data-pick]').forEach(b => b.addEventListener('click', () => fileInput.click()));
     document.querySelectorAll('[data-openlink]').forEach(b => b.addEventListener('click', () => openImport(true)));
     $('#addBtn').addEventListener('click', () => fileInput.click());
+    let installEvt = null;
+    window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; $('#installBtn').hidden = false; });
+    window.addEventListener('appinstalled', () => { installEvt = null; $('#installBtn').hidden = true; toast('Installed. Open it from your home screen.'); });
+    $('#installBtn').addEventListener('click', async () => {
+      if (!installEvt) return;
+      installEvt.prompt();
+      try { await installEvt.userChoice; } catch (_) { /* ignore */ }
+      installEvt = null; $('#installBtn').hidden = true;
+    });
     $('#linkBtn').addEventListener('click', () => openImport($('#impPanel').hidden));
     $('#impPanel').addEventListener('submit', importFromUrl);
     $('#impClose').addEventListener('click', () => { if (importCtl) importCtl.abort(); else { openImport(false); impMsg(''); } });
@@ -954,10 +970,10 @@ input[type="range"] { width: 100%; height: 28px; accent-color: var(--accent); ma
     });
     media.addEventListener('loadedmetadata', () => {
       $('#tDur').textContent = fmtTime(media.duration);
-      if (cur && !cur.dur && isFinite(media.duration)) { cur.dur = media.duration; store.put('tracks', cur).catch(() => {}); renderLists(); }
+      if (cur && !cur.dur && isFinite(media.duration)) { cur.dur = media.duration; store.put('tracks', cur).catch(() => {}); if (!renaming) renderLists(); }
     });
-    media.addEventListener('play', () => { updatePlayIcon(); renderLists(); });
-    media.addEventListener('pause', () => { updatePlayIcon(); renderLists(); });
+    media.addEventListener('play', () => { updatePlayIcon(); refreshPlaying(); });
+    media.addEventListener('pause', () => { updatePlayIcon(); refreshPlaying(); });
     media.addEventListener('ended', () => next(true));
     media.addEventListener('error', () => { if (cur) toast('This file could not be played. Your browser may not support its format.'); });
 
@@ -984,7 +1000,8 @@ input[type="range"] { width: 100%; height: 28px; accent-color: var(--accent); ma
     $('#noStore').hidden = !!db;
     renderAll();
     if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => { navigator.serviceWorker.register('sw.js').catch(() => {}); });
+      const regSW = () => navigator.serviceWorker.register('sw.js').catch(() => {});
+      if (document.readyState === 'complete') regSW(); else window.addEventListener('load', regSW);
     }
   }
   const ICON192 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAMAAAADACAIAAADdvvtQAAACYklEQVR42u3dsQ3CMBCG0fTMxSKULEFJxyY0dKxBwSI0SDRkhuNwzvaTvgnCk+BXQrzsjgcp3OISCCABJIAEkASQABJAAkgCSAAJIAEkASSABJAAkgASQAJIAAkgCSABJIAEkASQABJAAkgCSAAJIAEkASSABJAAEkASQAJIAAkgCSABJID+1Ol29ckBFO/1ea9hBNBPgDACKAEQRgAlAMIIoARAa/fnY385+1wBCgLCCKAEQBgBlAAII4ASAGEEUAIgMw2gBEAYAZQACCOA3llhBBBGAG0NyEwDCCOACgDCCCCMAKoBCCOAzDSAagDCCCCMAKoBCCOAMAKoTJPPNIAwAggjgMYANCEjgDACqHDDzzSAMAIII4BmADQkI4AwAqjPxphpAGEEEEYATQ6oX0YAYQTQiPUy0wDCCCCMAAKoU0YAYQTQZJWaaQBhBBBGAAHUKSOAMAJIAAHkKwwgP6IBQgcgdAACyK0MgNxMBQgdgNAByCOtAAHkoXqA0AEIHYD8tRkggLxcASCvdwEIHYDQAchLNgECyGt+ATKyAEIHIIetAOS4J4AAQgcgIwsgh+4C5NhvgABCByB0ANoC0OQjCyB0AGoOCB2A0AGoLSB0ADKyAGoOCB2A0AGoLSB0AEIHoLaAjCyAgoDQASgICB2AgoDQASgICB2A4oCMLICCgNABKAgIHYCCgNABKBg6AAkgCSABJIAEkACSABJAAkgASQAJIAEkgCSABJAAEkASQAJIAAkgASQBJIAEkACSABJAAkgASQAJIAEkgCSABJAAEkACyFUQQAJIAAkgCSC16wtcvvehpGiwggAAAABJRU5ErkJggg==';
@@ -992,16 +1009,10 @@ input[type="range"] { width: 100%; height: 28px; accent-color: var(--accent); ma
   function setManifest() {
     try {
       const base = new URL('./', location.href).href;
-      const m = {
-        name: 'Offline Player', short_name: 'Offline', start_url: base, scope: base, display: 'standalone',
+      const m = { name: 'Offline Player', short_name: 'Offline', start_url: base, scope: base, display: 'standalone',
         background_color: '#EDEFEA', theme_color: '#0B6A62',
-        icons: [
-          { src: ICON192, sizes: '192x192', type: 'image/png', purpose: 'any' },
-          { src: ICON512, sizes: '512x512', type: 'image/png', purpose: 'any' }
-        ]
-      };
-      const l = document.createElement('link');
-      l.rel = 'manifest';
+        icons: [ { src: ICON192, sizes: '192x192', type: 'image/png', purpose: 'any' }, { src: ICON512, sizes: '512x512', type: 'image/png', purpose: 'any' } ] };
+      const l = document.createElement('link'); l.rel = 'manifest';
       l.href = URL.createObjectURL(new Blob([JSON.stringify(m)], { type: 'application/manifest+json' }));
       document.head.appendChild(l);
     } catch (e) { /* ignore */ }
