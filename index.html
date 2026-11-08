@@ -94,8 +94,9 @@ h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; }
 .prog small { font: 12px var(--font-mono); color: var(--muted); }
 
 /* tabs */
-.tabs { display: flex; gap: 4px; margin: 18px 0 16px; border-bottom: 1px solid var(--line); }
-.tab { min-height: 44px; padding: 0 12px; font-weight: 600; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; display: inline-flex; align-items: center; gap: 8px; }
+.tabs { display: flex; gap: 2px; margin: 18px 0 16px; border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
+.tabs::-webkit-scrollbar { display: none; }
+.tab { flex: none; white-space: nowrap; min-height: 44px; padding: 0 11px; font-weight: 600; color: var(--muted); border-bottom: 2px solid transparent; margin-bottom: -1px; display: inline-flex; align-items: center; gap: 8px; }
 .tab[aria-selected="true"] { color: var(--fg); border-bottom-color: var(--accent); }
 .tab small { font: 500 11px var(--font-mono); color: var(--muted); }
 
@@ -157,6 +158,16 @@ input[type="text"], input[type="search"], select { min-height: 44px; padding: 0 
 .list .link-row:last-child { border-bottom: 1px solid var(--line); }
 .link-row .txt { padding: 10px 0; }
 .link-row a.icon-btn { color: var(--accent); }
+
+/* find music */
+.find-row { border-top: 1px solid var(--line); padding: 4px 0 12px; display: grid; gap: 6px; min-width: 0; }
+.list .find-row:last-child { border-bottom: 1px solid var(--line); }
+.find-row .row-main { min-height: 52px; }
+.find-act { display: flex; flex-wrap: wrap; gap: 8px; padding-left: 52px; }
+.find-act a.btn { text-decoration: none; color: var(--fg); }
+.fstat { margin: 0; padding-left: 52px; font: 12px/1.45 var(--font-mono); color: var(--muted); word-break: break-all; user-select: text; }
+.fstat:empty { display: none; }
+#findQ { flex: 1 1 180px; }
 
 /* dock */
 .dock { position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; background: var(--surface); border-top: 1px solid var(--line); box-shadow: 0 -6px 24px var(--shadow); padding-bottom: env(safe-area-inset-bottom, 0px); }
@@ -259,6 +270,7 @@ input[type="range"] { width: 100%; height: 28px; accent-color: var(--accent); ma
   <nav class="tabs" role="tablist" aria-label="Sections">
     <button class="tab" role="tab" id="tab-library" aria-selected="true" aria-controls="view-library" data-view="library">Library <small id="cLib">0</small></button>
     <button class="tab" role="tab" id="tab-playlists" aria-selected="false" aria-controls="view-playlists" data-view="playlists">Playlists <small id="cPl">0</small></button>
+    <button class="tab" role="tab" id="tab-find" aria-selected="false" aria-controls="view-find" data-view="find">Find music</button>
     <button class="tab" role="tab" id="tab-links" aria-selected="false" aria-controls="view-links" data-view="links">Links <small id="cLk">0</small></button>
   </nav>
 
@@ -304,6 +316,20 @@ input[type="range"] { width: 100%; height: 28px; accent-color: var(--accent); ma
         <button class="btn primary" type="submit">Create</button>
       </form>
       <div id="plBody"></div>
+    </section>
+
+    <section id="view-find" role="tabpanel" aria-labelledby="tab-find" hidden>
+      <form class="field" id="findForm" autocomplete="off" role="search">
+        <input type="search" id="findQ" placeholder="Song, artist or keyword" aria-label="Search for free music" enterkeyhint="search">
+        <button class="btn primary" type="submit" id="findGo">Search</button>
+      </form>
+      <div class="chips" id="findSrc" style="margin-top:10px">
+        <button class="chip" type="button" data-src="ia" aria-pressed="true">Internet Archive</button>
+        <button class="chip" type="button" data-src="ov" aria-pressed="false">Creative Commons</button>
+      </div>
+      <p class="hint">Searches free and legal music only: public domain and Creative Commons. Save puts a file in your Library for offline play. Get link shows the direct file link. Check each license before reusing a track.</p>
+      <p class="hint" id="findMsg" role="status" aria-live="polite"></p>
+      <ul class="list" id="findList" style="margin-top:10px"></ul>
     </section>
 
     <section id="view-links" role="tabpanel" aria-labelledby="tab-links" hidden>
@@ -529,6 +555,33 @@ input[type="range"] { width: 100%; height: 28px; accent-color: var(--accent); ma
     $('#impBar').style.width = total ? Math.min(100, got / total * 100) + '%' : '30%';
     $('#impTxt').textContent = total ? fmtSize(got) + ' of ' + fmtSize(total) : fmtSize(got) + ' downloaded';
   }
+  async function fetchAndSave(urlStr, nameOverride, onProg, signal) {
+    const url = new URL(urlStr);
+    const res = await fetch(url.href, { signal });
+    if (!res.ok) throw new Error('http ' + res.status);
+    const mime = (res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
+    const total = parseInt(res.headers.get('content-length'), 10) || 0;
+    let blob;
+    if (res.body && res.body.getReader) {
+      const rd = res.body.getReader(), parts = []; let got = 0;
+      for (;;) { const r = await rd.read(); if (r.done) break; parts.push(r.value); got += r.value.length; if (onProg) onProg(got, total); }
+      blob = new Blob(parts, { type: mime });
+    } else { blob = await res.blob(); }
+    let fname = url.pathname.split('/').pop() || '';
+    try { fname = decodeURIComponent(fname); } catch (_) { /* keep raw */ }
+    const kind = kindOf({ name: fname, type: mime });
+    if (!kind) throw new Error('notmedia');
+    const name = nameOverride || fname.replace(/\.[^.]+$/, '') || url.hostname;
+    return saveTrack(blob, name, kind, mime);
+  }
+  function errText(err) {
+    if (err && err.name === 'AbortError') return 'Download cancelled.';
+    const m = (err && err.message) || '';
+    if (m === 'notmedia') return 'That link opens a web page, not a music or video file. Look for a direct link that ends in .mp3, .m4a or .mp4.';
+    if (/^http /.test(m)) return 'The site replied with an error (' + m.slice(5) + '). Check the link and try again.';
+    if (err && err.name === 'TypeError') return 'This site does not allow saving from other websites, or you are offline. Download the file with your browser instead, then use Add files.';
+    return 'Could not save that file. Your device may be out of space.';
+  }
   async function importFromUrl(e) {
     e.preventDefault();
     if (importCtl) return;
@@ -542,31 +595,12 @@ input[type="range"] { width: 100%; height: 28px; accent-color: var(--accent); ma
     impMsg('');
     importCtl = new AbortController(); impBusy(true);
     try {
-      const res = await fetch(url.href, { signal: importCtl.signal });
-      if (!res.ok) throw new Error('http ' + res.status);
-      const mime = (res.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
-      const total = parseInt(res.headers.get('content-length'), 10) || 0;
-      let blob;
-      if (res.body && res.body.getReader) {
-        const rd = res.body.getReader(), parts = []; let got = 0;
-        for (;;) { const r = await rd.read(); if (r.done) break; parts.push(r.value); got += r.value.length; impProgress(got, total); }
-        blob = new Blob(parts, { type: mime });
-      } else { blob = await res.blob(); }
-      let fname = url.pathname.split('/').pop() || '';
-      try { fname = decodeURIComponent(fname); } catch (_) { /* keep raw */ }
-      const kind = kindOf({ name: fname, type: mime });
-      if (!kind) throw new Error('notmedia');
-      const name = $('#impName').value.trim() || fname.replace(/\.[^.]+$/, '') || url.hostname;
-      const t = await saveTrack(blob, name, kind, mime);
+      const t = await fetchAndSave(url.href, $('#impName').value.trim(), impProgress, importCtl.signal);
       askPersist(); renderAll();
       $('#impUrl').value = ''; $('#impName').value = '';
       impMsg('Saved "' + t.name + '" (' + fmtSize(t.size) + '). It now plays offline from your Library.');
     } catch (err) {
-      if (err && err.name === 'AbortError') impMsg('Download cancelled.');
-      else if (err && err.message === 'notmedia') impMsg('That link opens a web page, not a music or video file. Look for a direct link that ends in .mp3, .m4a or .mp4.');
-      else if (err && /^http /.test(err.message || '')) impMsg('The site replied with an error (' + err.message.slice(5) + '). Check the link and try again.');
-      else if (err && err.name === 'TypeError') impMsg('This site does not allow saving from other websites, or you are offline. Download the file with your browser instead, then use Add files.');
-      else impMsg('Could not save that file. Your device may be out of space.');
+      impMsg(errText(err));
     } finally {
       importCtl = null; impBusy(false);
     }
@@ -576,6 +610,107 @@ input[type="range"] { width: 100%; height: 28px; accent-color: var(--accent); ma
     p.hidden = !open;
     $('#linkBtn').setAttribute('aria-expanded', String(open));
     if (open) { $('#impUrl').focus(); p.scrollIntoView({ block: 'nearest' }); }
+  }
+
+  /* ---------- find free music ---------- */
+  let findSrc = 'ia', findResults = [], findStatus = {}, findBusy = false;
+  const licShort = s => String(s || '').replace(/^https?:\/\/(creativecommons\.org\/(licenses|publicdomain)\/)?/i, '').replace(/\/+$/, '').replace(/\//g, ' ').toUpperCase().slice(0, 24);
+  async function searchIA(q) {
+    const u = new URL('https://archive.org/advancedsearch.php');
+    u.searchParams.set('q', '(' + q + ') AND mediatype:audio');
+    ['identifier', 'title', 'creator', 'licenseurl'].forEach(f => u.searchParams.append('fl[]', f));
+    u.searchParams.append('sort[]', 'downloads desc');
+    u.searchParams.set('rows', '20'); u.searchParams.set('page', '1'); u.searchParams.set('output', 'json');
+    const res = await fetch(u.href);
+    if (!res.ok) throw new Error('http ' + res.status);
+    const j = await res.json();
+    const docs = (j.response && j.response.docs) || [];
+    return docs.map(d => ({
+      key: String(d.identifier), src: 'ia', url: null, dur: 0,
+      title: Array.isArray(d.title) ? d.title[0] : (d.title || d.identifier),
+      creator: Array.isArray(d.creator) ? d.creator.join(', ') : (d.creator || ''),
+      license: d.licenseurl ? licShort(d.licenseurl) : 'Public / free',
+      page: 'https://archive.org/details/' + encodeURIComponent(d.identifier)
+    }));
+  }
+  async function searchOV(q) {
+    const u = new URL('https://api.openverse.org/v1/audio/');
+    u.searchParams.set('q', q); u.searchParams.set('page_size', '20'); u.searchParams.set('category', 'music');
+    const res = await fetch(u.href);
+    if (!res.ok) throw new Error('http ' + res.status);
+    const j = await res.json();
+    return (j.results || []).filter(r => r && r.url).map(r => ({
+      key: String(r.id || r.url), src: 'ov', url: r.url, title: r.title || 'Untitled', creator: r.creator || '',
+      license: ((r.license || '') + (r.license_version ? ' ' + r.license_version : '')).toUpperCase().trim() || 'Creative Commons',
+      dur: r.duration ? r.duration / 1000 : 0, page: r.foreign_landing_url || ''
+    }));
+  }
+  async function resolveUrl(r) {
+    if (r.url) return r.url;
+    const res = await fetch('https://archive.org/metadata/' + encodeURIComponent(r.key));
+    if (!res.ok) throw new Error('http ' + res.status);
+    const j = await res.json();
+    const ext = ['mp3', 'ogg', 'm4a', 'opus', 'flac'];
+    const files = (j.files || []).filter(f => f && /\.(mp3|ogg|m4a|opus|flac)$/i.test(f.name || ''))
+      .sort((x, y) => ext.indexOf(x.name.split('.').pop().toLowerCase()) - ext.indexOf(y.name.split('.').pop().toLowerCase()));
+    if (!files.length) throw new Error('nofile');
+    r.url = 'https://archive.org/download/' + encodeURIComponent(r.key) + '/' + files[0].name.split('/').map(encodeURIComponent).join('/');
+    return r.url;
+  }
+  function findLi(key) { return Array.from($('#findList').children).find(li => li.dataset.key === key); }
+  function setStat(key, text) {
+    findStatus[key] = text;
+    const li = findLi(key), p = li && li.querySelector('.fstat');
+    if (p) p.textContent = text;
+  }
+  function renderFind() {
+    $('#findList').innerHTML = findResults.map(r => {
+      const sub = [r.creator, r.license, r.dur ? fmtTime(r.dur) : ''].filter(Boolean).join(' · ') || 'Free music';
+      return '<li class="find-row" data-key="' + esc(r.key) + '"><div class="row-main">' + cover({ name: r.title }, false) +
+        '<span class="txt"><b>' + esc(r.title) + '</b><small>' + esc(sub) + '</small></span></div>' +
+        '<div class="find-act"><button class="btn small primary" type="button" data-act="fsave">Save</button>' +
+        '<button class="btn small" type="button" data-act="fcopy">' + ic('link') + 'Get link</button>' +
+        (r.page ? '<a class="btn small" href="' + esc(r.page) + '" target="_blank" rel="noopener noreferrer">' + ic('external') + 'Source</a>' : '') + '</div>' +
+        '<p class="fstat" role="status">' + esc(findStatus[r.key] || '') + '</p></li>';
+    }).join('');
+  }
+  async function doFind(e) {
+    e.preventDefault();
+    if (findBusy) return;
+    const q = $('#findQ').value.trim(), msg = $('#findMsg');
+    if (!q) { msg.textContent = 'Type a song name, artist or keyword.'; return; }
+    findBusy = true; $('#findGo').disabled = true; msg.textContent = 'Searching…';
+    try {
+      findResults = findSrc === 'ia' ? await searchIA(q) : await searchOV(q);
+      findStatus = {}; renderFind();
+      msg.textContent = findResults.length ? findResults.length + ' results. Only save music you have the right to keep.' : 'No results. Try a simpler keyword or the other source.';
+    } catch (err) {
+      findResults = []; renderFind();
+      msg.textContent = navigator.onLine === false ? 'You are offline. Searching needs internet.' : 'The search did not work. Check your connection or try the other source.';
+    } finally { findBusy = false; $('#findGo').disabled = false; }
+  }
+  async function onFindClick(e) {
+    const b = e.target.closest('[data-act]'); if (!b) return;
+    const li = b.closest('li[data-key]'), r = li && findResults.find(x => x.key === li.dataset.key);
+    if (!r) return;
+    const act = b.dataset.act;
+    b.disabled = true;
+    try {
+      setStat(r.key, 'Finding the file…');
+      const url = await resolveUrl(r);
+      if (act === 'fcopy') {
+        let ok = false;
+        try { await navigator.clipboard.writeText(url); ok = true; } catch (_) { /* show it instead */ }
+        setStat(r.key, (ok ? 'Link copied: ' : 'Link: ') + url);
+      } else {
+        const t = await fetchAndSave(url, r.title + (r.creator ? ' - ' + r.creator : ''), (g, tot) => setStat(r.key, 'Saving… ' + (tot ? Math.round(g / tot * 100) + '%' : fmtSize(g))));
+        askPersist(); renderAll();
+        setStat(r.key, 'Saved to your Library (' + fmtSize(t.size) + '). It plays offline.');
+        toast('Saved "' + t.name + '".');
+      }
+    } catch (err) {
+      setStat(r.key, err && err.message === 'nofile' ? 'No audio file found in this item. Try another result.' : errText(err));
+    } finally { b.disabled = false; }
   }
 
   /* ---------- rendering ---------- */
@@ -673,7 +808,7 @@ input[type="range"] { width: 100%; height: 28px; accent-color: var(--accent); ma
   function setView(v) {
     view = v;
     document.querySelectorAll('.tab').forEach(b => b.setAttribute('aria-selected', String(b.dataset.view === v)));
-    ['library', 'playlists', 'links'].forEach(n => { $('#view-' + n).hidden = n !== v; });
+    ['library', 'playlists', 'find', 'links'].forEach(n => { $('#view-' + n).hidden = n !== v; });
     confirmId = null; expandedRow = null; renaming = null; renderLists(); renderLinks();
   }
 
@@ -920,6 +1055,15 @@ input[type="range"] { width: 100%; height: 28px; accent-color: var(--accent); ma
     });
     $('#linkBtn').addEventListener('click', () => openImport($('#impPanel').hidden));
     $('#impPanel').addEventListener('submit', importFromUrl);
+    $('#findForm').addEventListener('submit', doFind);
+    $('#findList').addEventListener('click', onFindClick);
+    $('#findSrc').addEventListener('click', e => {
+      const c = e.target.closest('[data-src]'); if (!c) return;
+      findSrc = c.dataset.src;
+      document.querySelectorAll('#findSrc .chip').forEach(x => x.setAttribute('aria-pressed', String(x === c)));
+      findResults = []; findStatus = {}; renderFind(); $('#findMsg').textContent = '';
+      if ($('#findQ').value.trim()) doFind(new Event('submit'));
+    });
     $('#impClose').addEventListener('click', () => { if (importCtl) importCtl.abort(); else { openImport(false); impMsg(''); } });
     fileInput.addEventListener('change', () => { const f = Array.from(fileInput.files); fileInput.value = ''; addFiles(f); });
     $('#sampleBtn').addEventListener('click', () => addFiles([makeSample()]));
