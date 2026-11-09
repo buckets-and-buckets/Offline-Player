@@ -179,8 +179,17 @@ input[type="text"], input[type="search"], select { min-height: 44px; padding: 0 
 .now .txt b { font-size: 14px; }
 .ctl { width: 44px; height: 44px; border-radius: 10px; display: grid; place-items: center; }
 .ctl:hover { background: var(--surface-2); }
-.ctl.play { width: 52px; height: 52px; border-radius: 50%; background: var(--accent); color: var(--accent-fg); }
+.ctl.play { width: 56px; height: 56px; border-radius: 50%; background: var(--accent); color: var(--accent-fg); }
 .ctl.play:hover { background: var(--accent); }
+.transport { display: flex; align-items: center; justify-content: center; gap: 10px; }
+.tbtn { width: 52px; height: 52px; border-radius: 50%; display: grid; place-items: center; background: var(--surface-2); border: 1px solid var(--line); position: relative; }
+.tbtn .ic { width: 22px; height: 22px; }
+.tbtn small { position: absolute; font: 700 9px var(--font-mono); bottom: 8px; }
+.tbtn.sk .ic { margin-bottom: 6px; }
+.tbtn.big { width: 76px; height: 76px; background: var(--accent); color: var(--accent-fg); border-color: transparent; }
+.tbtn.big .ic { width: 34px; height: 34px; }
+.tbtn:active { transform: scale(0.94); }
+.np, .deck { cursor: pointer; }
 .sheet { display: none; padding: 14px 0 6px; max-height: min(70vh, 600px); overflow: auto; }
 .dock.open .sheet { display: grid; gap: 14px; }
 .stage { display: grid; gap: 12px; }
@@ -323,13 +332,17 @@ input[type="range"] { width: 100%; height: 28px; accent-color: var(--accent); ma
         <input type="search" id="findQ" placeholder="Try: piano, lofi, nasheed, oud" aria-label="Search for free music" enterkeyhint="search">
         <button class="btn primary" type="submit" id="findGo">Search</button>
       </form>
+      <div class="chips" id="findKind" style="margin-top:10px" aria-label="What to search for">
+        <button class="chip" type="button" data-kind="audio" aria-pressed="true">Music</button>
+        <button class="chip" type="button" data-kind="video" aria-pressed="false">Videos</button>
+      </div>
       <div class="chips" id="findEx" aria-label="Example searches" style="margin-top:10px"></div>
       <div class="chips" id="findSrc" style="margin-top:10px" aria-label="Where to search">
         <button class="chip" type="button" data-src="all" aria-pressed="true">All sources</button>
         <button class="chip" type="button" data-src="ia" aria-pressed="false">Internet Archive</button>
         <button class="chip" type="button" data-src="ov" aria-pressed="false">Creative Commons</button>
       </div>
-      <p class="hint" id="findMsg" role="status" aria-live="polite">Free and legal music only: public domain and Creative Commons. Famous commercial songs are not here. For those, use a music app such as YouTube Music or Anghami.</p>
+      <p class="hint" id="findMsg" role="status" aria-live="polite">Free and legal music and videos only: public domain and Creative Commons. Famous commercial songs and music videos are not here. For those, use YouTube Music, Anghami or Spotify.</p>
       <ul class="list" id="findList" style="margin-top:10px"></ul>
       <div class="imp" id="findOther" style="margin-top:14px">
         <h2>Search the websites directly</h2>
@@ -365,6 +378,13 @@ input[type="range"] { width: 100%; height: 28px; accent-color: var(--accent); ma
         <span id="tCur">0:00</span>
         <input type="range" id="seek" min="0" max="1000" value="0" aria-label="Seek">
         <span id="tDur">0:00</span>
+      </div>
+      <div class="transport">
+        <button class="tbtn" type="button" id="prev2" aria-label="Previous song"><svg class="ic"><use href="#i-prev"/></svg></button>
+        <button class="tbtn sk" type="button" id="back10" aria-label="Back 10 seconds"><svg class="ic"><use href="#i-back"/></svg><small>10s</small></button>
+        <button class="tbtn big" type="button" id="play2" aria-label="Play"><svg class="ic"><use href="#i-play"/></svg></button>
+        <button class="tbtn sk" type="button" id="fwd10" aria-label="Forward 10 seconds"><svg class="ic" style="transform:scaleX(-1)"><use href="#i-back"/></svg><small>10s</small></button>
+        <button class="tbtn" type="button" id="next2" aria-label="Next song"><svg class="ic"><use href="#i-next"/></svg></button>
       </div>
       <div class="opts">
         <button class="opt" type="button" id="shuffleBtn" aria-pressed="false"><svg class="ic"><use href="#i-shuffle"/></svg>Shuffle</button>
@@ -619,8 +639,8 @@ input[type="range"] { width: 100%; height: 28px; accent-color: var(--accent); ma
   }
 
   /* ---------- find free music ---------- */
-  let findSrc = 'all', findResults = [], findStatus = {}, findBusy = false;
-  const EXAMPLES = ['piano', 'lofi', 'acoustic guitar', 'classical', 'oud', 'ambient'];
+  let findSrc = 'all', findKind = 'audio', findResults = [], findStatus = {}, findBusy = false;
+  const EXAMPLES = { audio: ['piano', 'lofi', 'acoustic guitar', 'classical', 'oud', 'ambient'], video: ['concert', 'live music', 'dance', 'documentary', 'nature', 'cartoon'] };
   const licShort = s => String(s || '').replace(/^https?:\/\/(creativecommons\.org\/(licenses|publicdomain)\/)?/i, '').replace(/\/+$/, '').replace(/\//g, ' ').toUpperCase().slice(0, 24);
   const termsOf = q => q.split(/\s+/).map(s => s.replace(/["():\\]/g, '')).filter(Boolean).slice(0, 6);
   async function getJSON(url) {
@@ -628,15 +648,15 @@ input[type="range"] { width: 100%; height: 28px; accent-color: var(--accent); ma
     if (!res.ok) throw new Error('http ' + res.status);
     return res.json();
   }
-  async function iaQuery(op, terms) {
+  async function iaQuery(op, terms, mt) {
     const u = new URL('https://archive.org/advancedsearch.php');
-    u.searchParams.set('q', 'mediatype:audio AND (' + terms.join(' ' + op + ' ') + ')');
+    u.searchParams.set('q', 'mediatype:' + mt + ' AND (' + terms.join(' ' + op + ' ') + ')');
     ['identifier', 'title', 'creator', 'licenseurl'].forEach(f => u.searchParams.append('fl[]', f));
     u.searchParams.append('sort[]', 'downloads desc');
     u.searchParams.set('rows', '20'); u.searchParams.set('page', '1'); u.searchParams.set('output', 'json');
     const j = await getJSON(u.href);
     return ((j.response && j.response.docs) || []).map(d => ({
-      key: 'ia:' + d.identifier, id: String(d.identifier), src: 'ia', url: null, dur: 0,
+      key: 'ia:' + d.identifier, id: String(d.identifier), src: 'ia', kind: mt === 'movies' ? 'video' : 'audio', url: null, dur: 0,
       title: Array.isArray(d.title) ? d.title[0] : (d.title || d.identifier),
       creator: Array.isArray(d.creator) ? d.creator.join(', ') : (d.creator || ''),
       license: d.licenseurl ? licShort(d.licenseurl) : 'Public / free',
@@ -645,8 +665,9 @@ input[type="range"] { width: 100%; height: 28px; accent-color: var(--accent); ma
   }
   async function searchIA(q) {
     const t = termsOf(q); if (!t.length) return [];
-    let r = await iaQuery('AND', t);
-    if (!r.length && t.length > 1) r = await iaQuery('OR', t);
+    const mt = findKind === 'video' ? 'movies' : 'audio';
+    let r = await iaQuery('AND', t, mt);
+    if (!r.length && t.length > 1) r = await iaQuery('OR', t, mt);
     return r;
   }
   async function ovQuery(q, music) {
@@ -668,8 +689,9 @@ input[type="range"] { width: 100%; height: 28px; accent-color: var(--accent); ma
   async function resolveUrl(r) {
     if (r.url) return r.url;
     const j = await getJSON('https://archive.org/metadata/' + encodeURIComponent(r.id));
-    const ext = ['mp3', 'ogg', 'm4a', 'opus', 'flac'];
-    const files = (j.files || []).filter(f => f && /\.(mp3|ogg|m4a|opus|flac)$/i.test(f.name || ''))
+    const ext = r.kind === 'video' ? ['mp4', 'm4v', 'webm', 'ogv'] : ['mp3', 'ogg', 'm4a', 'opus', 'flac'];
+    const extRe = new RegExp('\\.(' + ext.join('|') + ')$', 'i');
+    const files = (j.files || []).filter(f => f && extRe.test(f.name || ''))
       .sort((x, y) => ext.indexOf(x.name.split('.').pop().toLowerCase()) - ext.indexOf(y.name.split('.').pop().toLowerCase()));
     if (!files.length) throw new Error('nofile');
     r.url = 'https://archive.org/download/' + encodeURIComponent(r.id) + '/' + files[0].name.split('/').map(encodeURIComponent).join('/');
@@ -690,7 +712,7 @@ input[type="range"] { width: 100%; height: 28px; accent-color: var(--accent); ma
   }
   function renderFind() {
     $('#findList').innerHTML = findResults.map(r => {
-      const sub = [r.creator, r.license, r.dur ? fmtTime(r.dur) : ''].filter(Boolean).join(' · ') || 'Free music';
+      const sub = [r.kind === 'video' ? 'Video' : 'Audio', r.creator, r.license, r.dur ? fmtTime(r.dur) : ''].filter(Boolean).join(' · ');
       return '<li class="find-row" data-key="' + esc(r.key) + '"><div class="row-main">' + cover({ name: r.title }, false) +
         '<span class="txt"><b>' + esc(r.title) + '</b><small>' + esc(sub) + '</small></span></div>' +
         '<div class="find-act"><button class="btn small primary" type="button" data-act="fsave">Save</button>' +
@@ -702,7 +724,12 @@ input[type="range"] { width: 100%; height: 28px; accent-color: var(--accent); ma
   }
   function renderOther() {
     const q = encodeURIComponent($('#findQ').value.trim()), has = !!q;
-    const L = [
+    const L = findKind === 'video' ? [
+      ['Internet Archive', has ? 'https://archive.org/search?query=' + q + '&and%5B%5D=mediatype%3A%22movies%22' : 'https://archive.org/details/movies'],
+      ['Pixabay Videos', has ? 'https://pixabay.com/videos/search/' + q + '/' : 'https://pixabay.com/videos/'],
+      ['Wikimedia Commons', has ? 'https://commons.wikimedia.org/w/index.php?search=' + q + '+filetype%3Avideo' : 'https://commons.wikimedia.org'],
+      ['Openverse', has ? 'https://openverse.org/search?q=' + q : 'https://openverse.org']
+    ] : [
       ['Internet Archive', has ? 'https://archive.org/search?query=' + q + '&and%5B%5D=mediatype%3A%22audio%22' : 'https://archive.org/details/audio'],
       ['Openverse', has ? 'https://openverse.org/search/audio?q=' + q : 'https://openverse.org/search/audio'],
       ['Jamendo', has ? 'https://www.jamendo.com/search?q=' + q : 'https://www.jamendo.com'],
@@ -713,7 +740,7 @@ input[type="range"] { width: 100%; height: 28px; accent-color: var(--accent); ma
     $('#findLinks').innerHTML = L.map(x => '<a class="chip" style="display:inline-flex;align-items:center;text-decoration:none;color:inherit" href="' + x[1] + '" target="_blank" rel="noopener noreferrer">' + esc(x[0]) + '</a>').join('');
   }
   function renderExamples() {
-    $('#findEx').innerHTML = EXAMPLES.map(x => '<button class="chip" type="button" data-ex="' + esc(x) + '">' + esc(x) + '</button>').join('');
+    $('#findEx').innerHTML = EXAMPLES[findKind].map(x => '<button class="chip" type="button" data-ex="' + esc(x) + '">' + esc(x) + '</button>').join('');
   }
   async function doFind(e) {
     e.preventDefault();
@@ -723,17 +750,17 @@ input[type="range"] { width: 100%; height: 28px; accent-color: var(--accent); ma
     if (!q) { msg.textContent = 'Type a song name, artist or keyword, or tap an example above.'; return; }
     findBusy = true; $('#findGo').disabled = true; msg.textContent = 'Searching…';
     const jobs = [];
-    if (findSrc !== 'ov') jobs.push(['Internet Archive', searchIA(q)]);
-    if (findSrc !== 'ia') jobs.push(['Creative Commons', searchOV(q)]);
+    if (findKind === 'video' || findSrc !== 'ov') jobs.push(['Internet Archive', searchIA(q)]);
+    if (findKind === 'audio' && findSrc !== 'ia') jobs.push(['Creative Commons', searchOV(q)]);
     const out = await Promise.allSettled(jobs.map(j => j[1]));
     const lists = [], notes = [];
     out.forEach((o, i) => { if (o.status === 'fulfilled') lists.push(o.value); else notes.push(jobs[i][0] + ' (' + why(o.reason) + ')'); });
     const merged = [], seen = {}; const max = Math.max.apply(null, lists.map(l => l.length).concat([0]));
     for (let i = 0; i < max; i++) lists.forEach(l => { if (l[i] && !seen[l[i].key]) { seen[l[i].key] = 1; merged.push(l[i]); } });
     findResults = merged; findStatus = {}; renderFind();
-    if (merged.length) msg.textContent = merged.length + ' results for "' + q + '". Only save music you have the right to keep.' + (notes.length ? ' Could not reach: ' + notes.join(', ') + '.' : '');
+    if (merged.length) msg.textContent = merged.length + ' results for "' + q + '". Only save what you have the right to keep.' + (notes.length ? ' Could not reach: ' + notes.join(', ') + '.' : '');
     else if (notes.length) msg.textContent = 'The search could not run: ' + notes.join(', ') + '. Use the website buttons below instead.';
-    else msg.textContent = 'No free music found for "' + q + '". Try one simple word such as piano or lofi, or use the website buttons below.';
+    else msg.textContent = 'No free ' + (findKind === 'video' ? 'videos' : 'music') + ' found for "' + q + '". Try one simple word, or use the website buttons below.';
     findBusy = false; $('#findGo').disabled = false;
   }
   async function onFindClick(e) {
@@ -962,6 +989,7 @@ input[type="range"] { width: 100%; height: 28px; accent-color: var(--accent); ma
     const b = $('#playBtn');
     b.innerHTML = ic(media.paused ? 'play' : 'pause');
     b.setAttribute('aria-label', media.paused ? 'Play' : 'Pause');
+    const b2 = $('#play2'); b2.innerHTML = ic(media.paused ? 'play' : 'pause'); b2.setAttribute('aria-label', media.paused ? 'Play' : 'Pause');
     dock.classList.toggle('playing', !media.paused);
   }
   function updateDock() {
@@ -1109,6 +1137,15 @@ input[type="range"] { width: 100%; height: 28px; accent-color: var(--accent); ma
     $('#findForm').addEventListener('submit', doFind);
     $('#findList').addEventListener('click', onFindClick);
     $('#findQ').addEventListener('input', renderOther);
+    $('#findKind').addEventListener('click', e => {
+      const c = e.target.closest('[data-kind]'); if (!c || c.dataset.kind === findKind) return;
+      findKind = c.dataset.kind;
+      document.querySelectorAll('#findKind .chip').forEach(x => x.setAttribute('aria-pressed', String(x === c)));
+      $('#findSrc').hidden = findKind === 'video';
+      $('#findQ').placeholder = findKind === 'video' ? 'Try: concert, dance, documentary' : 'Try: piano, lofi, nasheed, oud';
+      findResults = []; findStatus = {}; renderFind(); renderExamples(); renderOther();
+      if ($('#findQ').value.trim()) doFind(new Event('submit')); else $('#findMsg').textContent = findKind === 'video' ? 'Video search uses the Internet Archive only. Saved videos play offline in your Library.' : '';
+    });
     $('#findEx').addEventListener('click', e => { const c = e.target.closest('[data-ex]'); if (!c) return; $('#findQ').value = c.dataset.ex; doFind(new Event('submit')); });
     $('#findSrc').addEventListener('click', e => {
       const c = e.target.closest('[data-src]'); if (!c) return;
@@ -1145,6 +1182,17 @@ input[type="range"] { width: 100%; height: 28px; accent-color: var(--accent); ma
 
     $('#expandBtn').addEventListener('click', () => { dock.classList.toggle('open'); updateDock(); });
     $('#playBtn').addEventListener('click', togglePlay);
+    $('#play2').addEventListener('click', togglePlay);
+    $('#prev2').addEventListener('click', prev);
+    $('#next2').addEventListener('click', () => next(false));
+    const skip = d => { if (isFinite(media.duration)) media.currentTime = Math.max(0, Math.min(media.duration, media.currentTime + d)); };
+    $('#back10').addEventListener('click', () => skip(-10));
+    $('#fwd10').addEventListener('click', () => skip(10));
+    $('#np').addEventListener('click', togglePlay); $('#deck').addEventListener('click', togglePlay);
+    document.addEventListener('keydown', e => {
+      const tag = e.target && e.target.tagName;
+      if (e.code === 'Space' && cur && tag !== 'INPUT' && tag !== 'BUTTON' && tag !== 'SELECT' && tag !== 'TEXTAREA') { e.preventDefault(); togglePlay(); }
+    });
     $('#prevBtn').addEventListener('click', prev);
     $('#nextBtn').addEventListener('click', () => next(false));
     $('#shuffleBtn').addEventListener('click', () => { shuffle = !shuffle; savePrefs(); if (cur) buildOrder(queue.indexOf(cur.id)); updateDock(); });
