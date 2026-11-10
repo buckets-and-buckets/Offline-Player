@@ -102,6 +102,17 @@ h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; }
 
 /* forms */
 input[type="text"], input[type="search"], select { min-height: 44px; padding: 0 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--fg); font: inherit; min-width: 0; }
+.cl-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.cl-row .txt { flex: 1; min-width: 0; }
+.cl-row .txt b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; }
+.cl-row .txt small { color: var(--muted); font-size: 12px; }
+.meter { height: 10px; border-radius: 6px; background: var(--surface-2); overflow: hidden; margin: 8px 0 4px; }
+.meter i { display: block; height: 100%; background: var(--accent); }
+.cl-card { padding: 14px 0 6px; display: grid; gap: 8px; }
+.cl-card h3 { font-size: 17px; margin-top: 10px; }
+.cl-err { color: #b3261e; font-size: 14px; min-height: 20px; }
+.cl-form { display: grid; gap: 10px; max-width: 420px; }
+.cl-form input { min-height: 46px; padding: 0 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--ink); font: inherit; }
 .field { display: flex; gap: 8px; flex-wrap: wrap; }
 .field input { flex: 1 1 180px; }
 .tools { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; margin-bottom: 14px; }
@@ -280,6 +291,7 @@ input[type="range"] { width: 100%; height: 28px; accent-color: var(--accent); ma
     <button class="tab" role="tab" id="tab-library" aria-selected="true" aria-controls="view-library" data-view="library">Library <small id="cLib">0</small></button>
     <button class="tab" role="tab" id="tab-playlists" aria-selected="false" aria-controls="view-playlists" data-view="playlists">Playlists <small id="cPl">0</small></button>
     <button class="tab" role="tab" id="tab-find" aria-selected="false" aria-controls="view-find" data-view="find">Find music</button>
+    <button class="tab" role="tab" id="tab-cloud" aria-selected="false" aria-controls="view-cloud" data-view="cloud" hidden>Cloud</button>
     <button class="tab" role="tab" id="tab-links" aria-selected="false" aria-controls="view-links" data-view="links">Links <small id="cLk">0</small></button>
   </nav>
 
@@ -326,6 +338,8 @@ input[type="range"] { width: 100%; height: 28px; accent-color: var(--accent); ma
       </form>
       <div id="plBody"></div>
     </section>
+
+    <section id="view-cloud" role="tabpanel" aria-labelledby="tab-cloud" hidden><div id="cloudBody"></div></section>
 
     <section id="view-find" role="tabpanel" aria-labelledby="tab-find" hidden>
       <form class="field" id="findForm" autocomplete="off" role="search">
@@ -886,8 +900,152 @@ input[type="range"] { width: 100%; height: 28px; accent-color: var(--accent); ma
   function setView(v) {
     view = v;
     document.querySelectorAll('.tab').forEach(b => b.setAttribute('aria-selected', String(b.dataset.view === v)));
-    ['library', 'playlists', 'find', 'links'].forEach(n => { $('#view-' + n).hidden = n !== v; });
+    ['library', 'playlists', 'find', 'links', 'cloud'].forEach(n => { $('#view-' + n).hidden = n !== v; });
+    if (v === 'cloud') openCloud();
     confirmId = null; expandedRow = null; renaming = null; renderLists(); renderLinks();
+  }
+
+
+  /* ---------- cloud backup (only active when the app is built with a server address) ---------- */
+  const CLOUD_URL = String(window.OP_CLOUD_URL || '').replace(/\/+$/, '');
+  const cloud = { token: '', me: null, files: [], msg: '', err: '', busy: {}, sure: false, mode: 'signin', email: '' };
+  try { cloud.token = localStorage.getItem('op-cloud') || ''; } catch (_) { /* ignore */ }
+  const EXT_OK = /\.(mp3|m4a|aac|wav|ogg|oga|opus|flac|mp4|m4v|mov|webm|mkv)$/i;
+  function cloudName(t) {
+    if (EXT_OK.test(t.name)) return t.name;
+    const e = { 'audio/mpeg': 'mp3', 'audio/mp4': 'm4a', 'audio/x-m4a': 'm4a', 'audio/aac': 'aac', 'audio/wav': 'wav', 'audio/x-wav': 'wav', 'audio/ogg': 'ogg', 'audio/flac': 'flac', 'video/mp4': 'mp4', 'video/webm': 'webm', 'video/quicktime': 'mov' }[t.mime] || (t.kind === 'video' ? 'mp4' : 'mp3');
+    return t.name + '.' + e;
+  }
+  function setToken(t) { cloud.token = t || ''; try { if (t) localStorage.setItem('op-cloud', t); else localStorage.removeItem('op-cloud'); } catch (_) { /* ignore */ } }
+  async function cloudFetch(path, opts) {
+    opts = opts || {};
+    const h = Object.assign({}, opts.headers || {}); if (cloud.token) h.Authorization = 'Bearer ' + cloud.token;
+    let r;
+    try { r = await fetch(CLOUD_URL + path, Object.assign({}, opts, { headers: h })); } catch (e) { throw new Error('No internet connection. Your songs on this phone still play.'); }
+    if (!r.ok) {
+      let m = 'Something went wrong (' + r.status + ')'; try { const j = await r.json(); if (j && j.error) m = String(j.error); } catch (_) { /* ignore */ }
+      if (r.status === 401 && cloud.token && !/^\/v1\/(login|signup)/.test(path)) { setToken(''); cloud.me = null; cloud.files = []; m = 'Please sign in again.'; }
+      throw new Error(m);
+    }
+    return r;
+  }
+  async function refreshCloud() {
+    if (!cloud.token) { renderCloud(); return; }
+    try {
+      cloud.me = await (await cloudFetch('/v1/me')).json();
+      cloud.files = (await (await cloudFetch('/v1/files')).json()).files;
+    } catch (e) { cloud.err = e.message; }
+    renderCloud();
+  }
+  function openCloud() { cloud.err = ''; cloud.msg = ''; cloud.mode = 'signin'; renderCloud(); refreshCloud(); }
+  function renderCloud() {
+    const el = $('#cloudBody'); if (!el) return;
+    const note = (cloud.msg ? '<p class="hint" role="status">' + esc(cloud.msg) + '</p>' : '') + '<div class="cl-err" role="alert">' + esc(cloud.err || '') + '</div>';
+    if (!cloud.token && cloud.mode === 'forgot') {
+      el.innerHTML = '<div class="cl-card"><h3>Reset your password</h3><p class="hint">Enter your email and we will send you a code.</p><form class="cl-form"><input type="email" id="clEmail" placeholder="Email" autocomplete="username" required aria-label="Email" value="' + esc(cloud.email) + '">' + note + '<button class="btn primary" type="submit" data-cact="sendcode">Send code</button><button class="btn" type="button" data-cact="back">Back</button></form></div>';
+      return;
+    }
+    if (!cloud.token && cloud.mode === 'reset') {
+      el.innerHTML = '<div class="cl-card"><h3>Enter your code</h3><form class="cl-form"><input type="text" id="clCode" placeholder="Code from the email" autocomplete="one-time-code" autocapitalize="characters" required aria-label="Code"><input type="password" id="clPass" placeholder="New password (10+ characters)" autocomplete="new-password" required minlength="10" aria-label="New password">' + note + '<button class="btn primary" type="submit" data-cact="doreset">Change password</button><button class="btn" type="button" data-cact="back">Back</button></form></div>';
+      return;
+    }
+    if (!cloud.token) {
+      el.innerHTML = '<div class="cl-card"><h3>Back up your music</h3><p class="hint">Sign in to keep a private copy of your songs in the cloud and restore them on any phone. Your files stay yours and are never shared.</p>' +
+        '<form class="cl-form" id="clForm" autocomplete="on"><input type="email" id="clEmail" placeholder="Email" autocomplete="username" required aria-label="Email">' +
+        '<input type="password" id="clPass" placeholder="Password (10+ characters)" autocomplete="current-password" required minlength="10" aria-label="Password">' +
+        '<div class="cl-err" id="clErr" role="alert">' + esc(cloud.err || '') + '</div>' + (cloud.msg ? '<p class="hint" role="status">' + esc(cloud.msg) + '</p>' : '') +
+        '<button class="btn primary" type="submit" data-cact="signin">Sign in</button><button class="btn" type="button" data-cact="signup">Create account</button><button class="btn small" type="button" data-cact="forgot">Forgot password?</button></form></div>';
+      return;
+    }
+    const me = cloud.me, used = me ? me.used : 0, lim = me ? me.limit : 0, pct = lim ? Math.min(100, Math.round(used / lim * 100)) : 0;
+    const planNames = { free: 'Free', plus: 'Plus', pro: 'Pro' };
+    const local = tracks.filter(t => !t.cloud), have = new Set(tracks.map(t => t.cloud).filter(Boolean)), remote = cloud.files.filter(f => !have.has(f.id));
+    let h = (me && me.verified === false ? '<div class="cl-card"><h3>Confirm your email</h3><p class="hint">We sent a code to ' + esc(me.email) + '. Enter it to start backing up.</p><form class="cl-form"><input type="text" id="clVerify" placeholder="Code from the email" autocomplete="one-time-code" autocapitalize="characters" aria-label="Confirmation code"><button class="btn primary" type="submit" data-cact="verify">Confirm</button><button class="btn small" type="button" data-cact="resend">Send a new code</button></form></div>' : '') +
+      '<div class="cl-card">' + (me ? '<div><b>' + esc(me.email) + '</b> · ' + esc(planNames[me.plan] || me.plan) + ' plan</div><div class="meter" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="' + pct + '"><i style="width:' + pct + '%"></i></div><small class="hint">' + fmtSize(used) + ' of ' + fmtSize(lim) + ' used</small>' : '<p class="hint">Loading…</p>') +
+      '<div class="cl-err" role="alert">' + esc(cloud.err || '') + '</div><div class="field"><button class="btn small" type="button" data-cact="upgrade">Get more storage</button><button class="btn small" type="button" data-cact="signout">Sign out</button></div></div>';
+    h += '<div class="cl-card"><h3>On this phone, not backed up <small>' + local.length + '</small></h3>';
+    if (!local.length) h += '<p class="hint">Everything on this phone is backed up.</p>';
+    else {
+      h += '<div class="field"><button class="btn small primary" type="button" data-cact="upall">Back up all</button></div>';
+      h += local.map(t => '<div class="cl-row"><div class="txt"><b>' + esc(t.name) + '</b><small>' + esc(cloud.busy[t.id] || fmtSize(t.size)) + '</small></div><button class="btn small" type="button" data-cact="up" data-id="' + esc(t.id) + '"' + (cloud.busy[t.id] ? ' disabled' : '') + '>Back up</button></div>').join('');
+    }
+    h += '</div><div class="cl-card"><h3>In your cloud only <small>' + remote.length + '</small></h3>';
+    if (!remote.length) h += '<p class="hint">Nothing here yet. Songs you back up from another phone appear here.</p>';
+    else h += remote.map(f => '<div class="cl-row"><div class="txt"><b>' + esc(f.name) + '</b><small>' + esc(cloud.busy[f.id] || fmtSize(f.size)) + '</small></div><button class="btn small" type="button" data-cact="down" data-id="' + esc(f.id) + '"' + (cloud.busy[f.id] ? ' disabled' : '') + '>Save to phone</button><button class="btn small" type="button" data-cact="cdel" data-id="' + esc(f.id) + '" aria-label="Delete from cloud">Delete</button></div>').join('');
+    h += '</div><div class="cl-card"><button class="btn small' + (cloud.sure ? ' danger' : '') + '" type="button" data-cact="delacct">' + (cloud.sure ? 'Tap again to erase your account and cloud files' : 'Delete my account') + '</button></div>';
+    el.innerHTML = h;
+  }
+  function xhrUpload(blob, name, onProg) {
+    return new Promise((res, rej) => {
+      const x = new XMLHttpRequest(); x.open('PUT', CLOUD_URL + '/v1/files');
+      x.setRequestHeader('Authorization', 'Bearer ' + cloud.token); x.setRequestHeader('X-File-Name', encodeURIComponent(name));
+      x.upload.onprogress = e => { if (e.lengthComputable) onProg(e.loaded / e.total); };
+      x.onload = () => { let j = {}; try { j = JSON.parse(x.responseText); } catch (_) { /* ignore */ } x.status === 201 ? res(j) : rej(new Error(j.error || 'Upload failed (' + x.status + ')')); };
+      x.onerror = () => rej(new Error('No internet connection')); x.send(blob);
+    });
+  }
+  let lastPaint = 0;
+  async function cloudUpload(id) {
+    const t = tracks.find(x => x.id === id); if (!t || cloud.busy[id]) return;
+    cloud.busy[id] = 'Starting…'; renderCloud();
+    try {
+      const rec = await store.get('blobs', id); if (!rec) throw new Error('File missing on this phone');
+      const r = await xhrUpload(rec.blob, cloudName(t), f => { const now = Date.now(); if (now - lastPaint > 250) { lastPaint = now; cloud.busy[id] = 'Uploading ' + Math.round(f * 100) + '%'; renderCloud(); } });
+      t.cloud = r.id; await store.put('tracks', t); cloud.err = '';
+    } catch (e) { cloud.err = t.name + ': ' + e.message; }
+    delete cloud.busy[id]; await refreshCloud();
+  }
+  async function cloudDownload(fid) {
+    const f = cloud.files.find(x => x.id === fid); if (!f || cloud.busy[fid]) return;
+    cloud.busy[fid] = 'Downloading…'; renderCloud();
+    try {
+      const blob = await (await cloudFetch('/v1/files/' + encodeURIComponent(fid))).blob();
+      const t = await saveTrack(blob, f.name, f.kind, ''); t.cloud = fid; await store.put('tracks', t); cloud.err = ''; renderAll();
+    } catch (e) { cloud.err = f.name + ': ' + (e && e.message || 'Could not save'); }
+    delete cloud.busy[fid]; renderCloud();
+  }
+  async function onCloudClick(e) {
+    const b = e.target.closest('[data-cact]'); if (!b) return; const a = b.dataset.cact, id = b.dataset.id;
+    if (a === 'signin' || a === 'signup') {
+      e.preventDefault();
+      const email = $('#clEmail').value.trim(), pw = $('#clPass').value; b.disabled = true;
+      try { const r = await cloudFetch('/v1/' + (a === 'signin' ? 'login' : 'signup'), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password: pw }) }); setToken((await r.json()).token); cloud.err = ''; cloud.msg = ''; await refreshCloud(); }
+      catch (er) { cloud.err = er.message; renderCloud(); const x = $('#clEmail'); if (x) x.value = email; }
+      return;
+    }
+    if (a === 'forgot') { cloud.mode = 'forgot'; cloud.err = ''; cloud.msg = ''; cloud.email = ($('#clEmail') && $('#clEmail').value.trim()) || ''; renderCloud(); return; }
+    if (a === 'back') { cloud.mode = 'signin'; cloud.err = ''; cloud.msg = ''; renderCloud(); return; }
+    if (a === 'sendcode') {
+      e.preventDefault(); const email = $('#clEmail').value.trim(); if (!email) return; b.disabled = true;
+      try { await cloudFetch('/v1/password/forgot', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }) }); cloud.email = email; cloud.mode = 'reset'; cloud.err = ''; cloud.msg = 'If that email has an account, a code is on its way. It lasts 15 minutes.'; }
+      catch (er) { cloud.err = er.message; }
+      renderCloud(); return;
+    }
+    if (a === 'doreset') {
+      e.preventDefault(); const code = $('#clCode').value.trim(), pw = $('#clPass').value; if (!code || !pw) return; b.disabled = true;
+      try { await cloudFetch('/v1/password/reset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: cloud.email, code, password: pw }) }); cloud.mode = 'signin'; cloud.err = ''; cloud.msg = 'Password changed. Please sign in.'; }
+      catch (er) { cloud.err = er.message; }
+      renderCloud(); return;
+    }
+    if (a === 'verify') {
+      e.preventDefault(); const code = ($('#clVerify').value || '').trim(); if (!code) return; b.disabled = true;
+      try { await cloudFetch('/v1/verify', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) }); cloud.err = ''; toast('Email confirmed.'); }
+      catch (er) { cloud.err = er.message; }
+      await refreshCloud(); return;
+    }
+    if (a === 'resend') { try { await cloudFetch('/v1/verify/resend', { method: 'POST' }); cloud.err = ''; toast('A new code was sent.'); } catch (er) { cloud.err = er.message; } renderCloud(); return; }
+    if (a === 'signout') { try { await cloudFetch('/v1/logout', { method: 'POST' }); } catch (_) { /* ignore */ } setToken(''); cloud.me = null; cloud.files = []; cloud.err = ''; renderCloud(); }
+    else if (a === 'up') cloudUpload(id);
+    else if (a === 'upall') { for (const t of tracks.filter(x => !x.cloud)) { await cloudUpload(t.id); if (cloud.err) break; } }
+    else if (a === 'down') cloudDownload(id);
+    else if (a === 'cdel') { try { await cloudFetch('/v1/files/' + encodeURIComponent(id), { method: 'DELETE' }); cloud.err = ''; } catch (er) { cloud.err = er.message; } refreshCloud(); }
+    else if (a === 'upgrade') { if (typeof window.OP_PURCHASE === 'function') window.OP_PURCHASE(); else toast('Plans are bought inside the App Store or Google Play app.'); }
+    else if (a === 'delacct') {
+      if (!cloud.sure) { cloud.sure = true; renderCloud(); setTimeout(() => { cloud.sure = false; renderCloud(); }, 5000); return; }
+      try { await cloudFetch('/v1/me', { method: 'DELETE' }); setToken(''); cloud.me = null; cloud.files = []; cloud.sure = false; tracks.forEach(t => { delete t.cloud; store.put('tracks', t); }); toast('Your account and cloud files were erased.'); }
+      catch (er) { cloud.err = er.message; }
+      renderCloud();
+    }
   }
 
   /* ---------- playback ---------- */
@@ -1181,6 +1339,7 @@ input[type="range"] { width: 100%; height: 28px; accent-color: var(--accent); ma
     });
 
     $('#expandBtn').addEventListener('click', () => { dock.classList.toggle('open'); updateDock(); });
+    $('#cloudBody').addEventListener('click', onCloudClick);
     $('#playBtn').addEventListener('click', togglePlay);
     $('#play2').addEventListener('click', togglePlay);
     $('#prev2').addEventListener('click', prev);
@@ -1243,6 +1402,7 @@ input[type="range"] { width: 100%; height: 28px; accent-color: var(--accent); ma
     } catch (e) { db = null; tracks = []; playlists = []; links = []; }
     playlists.sort((a, b) => a.added - b.added);
     $('#noStore').hidden = !!db;
+    if (CLOUD_URL) $('#tab-cloud').hidden = false;
     renderAll(); renderExamples(); renderOther();
     if ('serviceWorker' in navigator) {
       const regSW = () => navigator.serviceWorker.register('sw.js').catch(() => {});
