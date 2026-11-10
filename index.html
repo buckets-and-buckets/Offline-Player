@@ -751,6 +751,10 @@ input[type="range"] { width: 100%; height: 28px; accent-color: var(--accent); ma
       ['Free Music Archive', has ? 'https://freemusicarchive.org/search?quicksearch=' + q : 'https://freemusicarchive.org'],
       ['Bandcamp', has ? 'https://bandcamp.com/search?q=' + q : 'https://bandcamp.com']
     ];
+    const REGIONAL = /shina|shinaki|gilgit|hunza|baltistan|balti\b|khowar|burushaski|brokskat|chitral|astore|diamer/i;
+    const regional = REGIONAL.test($('#findQ').value);
+    if (regional) L.unshift(['Global Recordings (Shina)', 'https://globalrecordings.net/en/language/scl']);
+    L.push(['YouTube (watch only)', has ? 'https://www.youtube.com/results?search_query=' + q : 'https://www.youtube.com']);
     $('#findLinks').innerHTML = L.map(x => '<a class="chip" style="display:inline-flex;align-items:center;text-decoration:none;color:inherit" href="' + x[1] + '" target="_blank" rel="noopener noreferrer">' + esc(x[0]) + '</a>').join('');
   }
   function renderExamples() {
@@ -774,7 +778,7 @@ input[type="range"] { width: 100%; height: 28px; accent-color: var(--accent); ma
     findResults = merged; findStatus = {}; renderFind();
     if (merged.length) msg.textContent = merged.length + ' results for "' + q + '". Only save what you have the right to keep.' + (notes.length ? ' Could not reach: ' + notes.join(', ') + '.' : '');
     else if (notes.length) msg.textContent = 'The search could not run: ' + notes.join(', ') + '. Use the website buttons below instead.';
-    else msg.textContent = 'No free ' + (findKind === 'video' ? 'videos' : 'music') + ' found for "' + q + '". Try one simple word, or use the website buttons below.';
+    else msg.textContent = 'No free ' + (findKind === 'video' ? 'videos' : 'music') + ' found for "' + q + '". Try one simple word, or use the website buttons below. ' + (/shina|shinaki|gilgit|hunza|baltistan|balti\b|khowar|burushaski|chitral/i.test(q) ? 'Most Shina songs are copyrighted and are on YouTube, so this app cannot download them. Global Recordings has free Shina audio. ' : '') + 'Songs sent to you on WhatsApp or already on your phone can be added with Add files, then they play offline.';
     findBusy = false; $('#findGo').disabled = false;
   }
   async function onFindClick(e) {
